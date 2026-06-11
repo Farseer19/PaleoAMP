@@ -40,8 +40,9 @@ Raw FASTQ reads (SRA)
   Novel AMP Candidates TSV
 ```
 
-The ML classifier is trained once on curated positive (APD, DRAMP, dbAASP)
-and negative (UniProt non-AMP) sequences using frozen ESM-2 embeddings.
+The ML classifier is trained once on curated positive (APD, DRAMP general,
+DRAMP specific, UniProt reviewed AMPs) and negative (UniProt non-AMP)
+sequences using frozen ESM-2 embeddings.
 Training commands are described in the [Classifier Training](#classifier-training) section.
 
 ---
@@ -63,7 +64,7 @@ conda activate paleoamp
 ```
 
 This installs all Python packages and the required bioinformatics tools
-(MEGAHIT, Prodigal, BLAST+, MMseqs2) from the bioconda channel.
+(MEGAHIT, Prodigal, MMseqs2) from the bioconda channel.
 
 ### 3. Install the PaleoAMP package
 
@@ -189,7 +190,8 @@ paleoamp ml score \
     --output-dir results/ml/scores/
 ```
 
-Use `--no-latest-only` to score all samples in `--orfs-dir` in one pass.
+Use `--all-samples` to score every sample in `--orfs-dir` in one pass
+instead of only the most recently modified one.
 
 ---
 
