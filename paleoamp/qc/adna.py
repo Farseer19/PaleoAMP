@@ -81,6 +81,12 @@ class DamageProfile:
                 f"mean read length {self.mean_read_length:.0f} < {t.min_read_length}"
             )
 
+        if self.mean_read_length > t.max_read_length:
+            reasons.append(
+                f"mean read length {self.mean_read_length:.0f} > {t.max_read_length} bp "
+                "(possible modern contamination — aDNA is typically short)"
+            )
+
         frac_passing = (
             self.passed_length_filter / self.total_reads
             if self.total_reads > 0 else 0.0
@@ -121,10 +127,10 @@ class DamageProfile:
 class QCThresholds:
     min_mean_phred: float = 20.0
     min_read_length: int = 30
-    max_read_length: int = 150
+    max_read_length: int = 300
     min_passing_fraction: float = 0.5
-    min_ct_rate_5prime: float = 0.05
-    min_ga_rate_3prime: float = 0.05
+    min_ct_rate_5prime: float = 0.10
+    min_ga_rate_3prime: float = 0.10
     terminal_positions: int = 10
     require_both_termini: bool = True
 

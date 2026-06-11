@@ -1,38 +1,44 @@
-"""Download and manage AMP reference databases (DRAMP, APD3, dbAMP)."""
+"""Download and manage AMP reference databases for the novelty screen."""
 
 from __future__ import annotations
 
 import hashlib
 import sys
+import time
 from pathlib import Path
 from typing import Iterator
 
 import requests
 from Bio import SeqIO
+from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 
 _DATABASES: dict[str, dict] = {
+    "apd": {
+        "url": "https://aps.unmc.edu/assets/sequences/naturalAMPs_APD2024a.fasta",
+        "filename": "apd_natural.fasta",
+        "description": "APD2024a — natural antimicrobial peptides",
+    },
+    "dramp_general": {
+        "url": "https://dramp.cpu-bioinfor.org/downloads/download.php?filename=download_data/DRAMP3.0_new/general_amps.fasta",
+        "filename": "dramp_general.fasta",
+        "description": "DRAMP 3.0 — general AMP sequences",
+    },
+    "dramp_specific": {
+        "url": "https://dramp.cpu-bioinfor.org/downloads/download.php?filename=download_data/DRAMP3.0_new/specific_amps.fasta",
+        "filename": "dramp_specific.fasta",
+        "description": "DRAMP 3.0 — specific AMPs (target-activity annotations)",
+    },
     "uniprot_amp": {
         "url": (
             "https://rest.uniprot.org/uniprotkb/search"
-            "?query=keyword:KW-0929+reviewed:true&format=fasta&size=500"
+            "?query=reviewed:true+keyword:KW-0929+length:[5+TO+200]&format=fasta&size=500"
         ),
         "filename": "uniprot_amp_reviewed.fasta",
         "description": "UniProt reviewed antimicrobial peptides (KW-0929)",
         "paginated": True,
-    },
-    "dramp": {
-        # DRAMP 3.0 bulk download — verify URL at https://dramp.cpu-bioinfor.org/downloads/
-        "url": "https://dramp.cpu-bioinfor.org/downloads/download.php?filename=DRAMP3.0_general.fasta",
-        "filename": "dramp_general.fasta",
-        "description": "DRAMP 3.0 — general AMP sequences",
-    },
-    "apd3": {
-        # APD3 moved to https://aps.unmc.edu — check for current release filename
-        "url": "https://aps.unmc.edu/AP/lib/APD_sequence_release_09142020.fasta",
-        "filename": "apd3.fasta",
-        "description": "Antimicrobial Peptide Database (APD3)",
+        "paginate": 10000,
     },
     "dbamp": {
         "url": "https://awi.cuhk.edu.cn/dbAMP/download/dbAMP_v2.0.fasta",
@@ -80,7 +86,12 @@ def download_amp_databases(
 
         print(f"[download] {name}: {info['description']}")
         try:
-            _fetch_file(info["url"], dest, timeout=timeout)
+            if info.get("paginated"):
+                _fetch_paginated(info["url"], dest,
+                                 total=info.get("paginate", 10000),
+                                 timeout=timeout)
+            else:
+                _fetch_file(info["url"], dest, timeout=timeout)
             paths[name] = dest
             count = _count_sequences(dest)
             print(f"[ok] {name}: {count:,} sequences → {dest}")
@@ -96,6 +107,36 @@ def _fetch_file(url: str, dest: Path, timeout: int = 60) -> None:
         with open(dest, "wb") as fh:
             for chunk in resp.iter_content(chunk_size=65536):
                 fh.write(chunk)
+
+
+def _fetch_paginated(url: str, dest: Path, total: int, timeout: int = 60,
+                     max_retries: int = 5) -> None:
+    """Fetch a UniProt FASTA result set across multiple pages until *total* seqs collected."""
+    import re as _re
+    collected = 0
+    next_url: str | None = url
+    with open(dest, "w") as fh:
+        while next_url and collected < total:
+            for attempt in range(max_retries):
+                try:
+                    r = requests.get(next_url, timeout=timeout)
+                    r.raise_for_status()
+                    break
+                except requests.RequestException as exc:
+                    if attempt == max_retries - 1:
+                        raise
+                    wait = 2 ** attempt
+                    print(f"\n  [retry {attempt + 1}/{max_retries} after {wait}s: {exc}]",
+                          flush=True)
+                    time.sleep(wait)
+            text = r.text
+            fh.write(text)
+            collected += text.count("\n>") + (1 if text.startswith(">") else 0)
+            link = r.headers.get("Link", "")
+            m = _re.search(r'<([^>]+)>;\s*rel="next"', link)
+            next_url = m.group(1) if m else None
+            print(f"  collected ~{collected:,} sequences …", end="\r", flush=True)
+    print()
 
 
 def _count_sequences(fasta_path: Path) -> int:
@@ -134,8 +175,13 @@ def merge_amp_databases(
         for db_name, path in db_paths.items():
             if not path.exists():
                 continue
-            for rec in SeqIO.parse(str(path), "fasta"):
-                seq = str(rec.seq).upper()
+            with open(path, encoding="utf-8", errors="replace") as fh:
+              for rec in SeqIO.parse(fh, "fasta"):
+                try:
+                    seq = str(rec.seq).upper()
+                except UnicodeDecodeError:
+                    seq = rec.seq._data.decode("ascii", errors="ignore").upper()
+                rec.seq = Seq(seq)
                 key = hashlib.md5(seq.encode()).hexdigest()
                 if deduplicate and key in seen:
                     continue

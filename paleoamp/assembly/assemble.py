@@ -128,7 +128,6 @@ def assemble_sample(
         "-o", str(out_path),
         "--min-contig-len", str(min_contig_len),
         "-t", str(threads),
-        "--no-mercy",
     ]
 
     subprocess.run(cmd, check=True, capture_output=True, text=True)

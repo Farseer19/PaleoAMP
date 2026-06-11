@@ -77,7 +77,7 @@ def hydrophobic_moment(seq: str, angle: float = 100.0) -> float:
 
 
 def boman_index(seq: str) -> float:
-    """Mean Boman index — values > 2.48 suggest protein-binding potential."""
+    """Mean residue interaction potential. Values > 0.5 indicate net polar/cationic character."""
     seq = seq.upper()
     vals = [_BOMAN.get(aa, 0.0) for aa in seq]
     return sum(vals) / len(vals) if vals else 0.0
@@ -211,6 +211,8 @@ _PHYSCOCHEM_CRITERIA = {
     "standard_aa_ok":     lambda p: p["frac_standard_aa"] == 1.0,
 }
 
+_BOMAN_THRESHOLD = 0.5  # net polar/cationic character — threshold for boman_ok criterion
+
 
 def validate_candidates(
     novel_tsv: Path,
@@ -255,18 +257,24 @@ def validate_candidates(
     df["aac_score"] = aac_predict_proba(clf, list(df["sequence"]))
     df["aac_pass"] = df["aac_score"] >= aac_threshold
 
-    # --- Consensus verdict ---
+    # --- Boman index criterion ---
+    df["boman_ok"] = df["boman_index"] >= _BOMAN_THRESHOLD
+
+    # --- Consensus verdict (5 criteria, PASS requires ≥ 4) ---
+    # Criteria: physcochem_pass, aac_pass, is_complete_orf, boman_ok, not_duplicate
+    # A partial ORF or low Boman index can each cost one criterion without failing.
     n_pass_criteria = (
         df["physcochem_pass"].astype(int)
         + df["aac_pass"].astype(int)
         + df["is_complete_orf"].astype(int)
+        + df["boman_ok"].astype(int)
         + (~df["is_duplicate"]).astype(int)
     )
 
     def _verdict(is_dup, n):
         if is_dup:
             return "DUPLICATE"
-        if n == 4:
+        if n >= 4:
             return "PASS"
         if n >= 2:
             return "WARN"

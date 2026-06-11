@@ -5,16 +5,17 @@ quality:
   min_mean_phred: 20
   # Minimum read length to consider (aDNA is typically short)
   min_read_length: 30
-  # Maximum read length — reads much longer than this are suspicious for aDNA
-  max_read_length: 150
+  # Maximum mean read length — flags non-trimmed long-read data (PacBio, ONT, NovaSeq 300-cycle)
+  # Standard Illumina 150-cycle short-read libraries are expected to approach 151 bp
+  max_read_length: 300
   # Minimum fraction of reads passing length filter
   min_passing_fraction: 0.5
 
 adna_damage:
   # Minimum C→T substitution rate at position 1 of 5' end to consider "damaged"
-  min_ct_rate_5prime: 0.05
+  min_ct_rate_5prime: 0.10
   # Minimum G→A substitution rate at position 1 of 3' end
-  min_ga_rate_3prime: 0.05
+  min_ga_rate_3prime: 0.10
   # Number of terminal positions to evaluate (each end)
   terminal_positions: 10
   # Require both 5' C→T AND 3' G→A signal for a PASS verdict

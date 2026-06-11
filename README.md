@@ -84,7 +84,7 @@ paleoamp --version
 
 ### Step 1 — Set up the AMP reference database
 
-Download the three source databases and merge them into a single
+Download the five source databases and merge them into a single
 non-redundant FASTA. This file is used by `paleoamp ml novelty` as the
 MMseqs2 reference to determine whether a candidate AMP is already known.
 
@@ -93,8 +93,9 @@ paleoamp db download
 paleoamp db merge
 ```
 
-Databases are saved to `data/amp_databases/` by default. Pass `--force` to
-re-download if files already exist.
+Downloads APD2024a, DRAMP 3.0 general, DRAMP 3.0 specific, UniProt reviewed
+AMPs (KW-0929), and dbAMP v2.0. Files are saved to `data/amp_databases/`
+by default. Pass `--force` to re-download if files already exist.
 
 ---
 
@@ -305,8 +306,10 @@ paleoamp ml validate \
     --output-dir results/ml/validated/
 ```
 
-Each candidate receives a verdict: **PASS** (3–4 criteria met), **WARN** (2),
-**FAIL** (0–1), or **DUPLICATE**.
+Each candidate receives a verdict: **PASS** (≥4 of 5 criteria met), **WARN** (2–3),
+**FAIL** (≤1), or **DUPLICATE**. The five criteria are: physicochemical filters,
+AAC classifier, complete ORF, Boman index ≥ 0.5, and not duplicate. Partial ORFs
+and a low Boman index each cost one criterion rather than being automatic failures.
 
 ---
 
@@ -339,8 +342,8 @@ Default thresholds live in `config/defaults.yaml`. Key settings:
 |---|---|---|---|
 | `quality` | `min_mean_phred` | 20 | Minimum mean base quality |
 | `quality` | `min_read_length` | 30 bp | Minimum read length |
-| `adna_damage` | `min_ct_rate_5prime` | 0.05 | 5′ C→T damage threshold |
-| `adna_damage` | `min_ga_rate_3prime` | 0.05 | 3′ G→A damage threshold |
+| `adna_damage` | `min_ct_rate_5prime` | 0.10 | 5′ C→T damage threshold |
+| `adna_damage` | `min_ga_rate_3prime` | 0.10 | 3′ G→A damage threshold |
 | `assembly` | `min_contig_len` | 200 bp | Minimum assembled contig length |
 
 Override thresholds at runtime with flags such as `--min-ct-rate` and

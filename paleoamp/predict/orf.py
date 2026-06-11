@@ -34,7 +34,6 @@ def predict_orfs(
     contigs: Path,
     output_dir: Path,
     sample_id: str,
-    min_orf_len: int = 10,
 ) -> ORFResult:
     """
     Run Prodigal in metagenome mode on *contigs* and write protein FASTA + GFF.
@@ -77,7 +76,6 @@ def predict_orfs(
 def predict_all(
     assembly_dir: Path,
     output_dir: Path,
-    min_orf_len: int = 10,
 ) -> list[ORFResult]:
     """
     Run ORF prediction on every sample assembly found under *assembly_dir*.
@@ -112,7 +110,6 @@ def predict_all(
             contigs=contigs,
             output_dir=output_dir / sample_id,
             sample_id=sample_id,
-            min_orf_len=min_orf_len,
         )
         results.append(result)
 

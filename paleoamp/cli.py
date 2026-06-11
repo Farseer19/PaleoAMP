@@ -48,13 +48,13 @@ def db_group():
 @click.option(
     "--databases", "-d",
     multiple=True,
-    default=["dramp", "apd3", "dbamp"],
+    default=["apd", "dramp_general", "dramp_specific", "uniprot_amp", "dbamp"],
     show_default=True,
     help="Which databases to download. Repeat flag for multiple.",
 )
 @click.option("--force", is_flag=True, help="Re-download even if file exists.")
 def db_download(output_dir: str, databases: tuple, force: bool):
-    """Download AMP reference databases (DRAMP, APD3, dbAMP)."""
+    """Download AMP reference databases (APD2024a, DRAMP 3.0, UniProt, dbAMP)."""
     from paleoamp.data.amp_db import download_amp_databases
 
     paths = download_amp_databases(
@@ -767,7 +767,8 @@ def ml_embed(dataset: str, output_dir: str, batch_size: int, device: str):
 )
 @click.option("--lr", default=1e-3, show_default=True, type=float)
 @click.option("--dropout", default=0.3, show_default=True, type=float)
-@click.option("--pos-weight", default=3.0, show_default=True, type=float)
+@click.option("--pos-weight", default=None, type=float,
+              help="BCELoss pos_weight. Omit to auto-compute as neg/pos ratio from training data.")
 @click.option("--batch-size", default=256, show_default=True)
 @click.option("--max-epochs", default=50, show_default=True)
 @click.option("--patience", default=7, show_default=True)
@@ -1078,7 +1079,9 @@ def ml_validate_cmd(
     2. Prodigal GFF partial-ORF flags
     3. AAC logistic regression (second classifier, independent of ESM-2)
 
-    Verdict: PASS (3-4 criteria met), WARN (2), FAIL (0-1), DUPLICATE.
+    Verdict: PASS (≥4 of 5 criteria met), WARN (2-3), FAIL (≤1), DUPLICATE.
+    Five criteria: physcochem, AAC, complete ORF, Boman index, not duplicate.
+    Partial ORFs and low Boman index each cost one criterion — not automatic failures.
     """
     from paleoamp.ml.validate import validate_candidates
     from rich.table import Table

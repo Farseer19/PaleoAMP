@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import re
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -54,18 +55,6 @@ _SOURCES: dict[str, dict] = {
         "paginate": 10000,
     },
     # Negatives
-    "amplify_neg": {
-        # AMPlify negative set — check https://github.com/bcgsc/AMPlify for current path
-        "url": (
-            "https://raw.githubusercontent.com/bcgsc/AMPlify/main/"
-            "src/AMPlify/models/train_val_test_split/AMPlify_negative_dataset.csv"
-        ),
-        "filename": "amplify_negatives.csv",
-        "label": 0,
-        "description": "AMPlify negative training set",
-        "format": "csv",
-        "seq_col": "sequence",
-    },
     "uniprot_non_amp": {
         # Reviewed SwissProt proteins without AMP keyword (KW-0929), length 5–200 aa.
         # Fetches up to 10,000 to give a ~3:1 neg:pos ratio vs APD.
@@ -82,18 +71,27 @@ _SOURCES: dict[str, dict] = {
 }
 
 
-def _download_paginated(url: str, dest: Path, total: int) -> None:
+def _download_paginated(url: str, dest: Path, total: int, max_retries: int = 5) -> None:
     """Fetch a UniProt FASTA result set across multiple pages until *total* seqs collected."""
     collected = 0
     next_url: str | None = url
     with open(dest, "w") as fh:
         while next_url and collected < total:
-            r = requests.get(next_url, timeout=60)
-            r.raise_for_status()
+            for attempt in range(max_retries):
+                try:
+                    r = requests.get(next_url, timeout=60)
+                    r.raise_for_status()
+                    break
+                except requests.RequestException as exc:
+                    if attempt == max_retries - 1:
+                        raise
+                    wait = 2 ** attempt
+                    print(f"\n  [retry {attempt + 1}/{max_retries} after {wait}s: {exc}]",
+                          flush=True)
+                    time.sleep(wait)
             text = r.text
             fh.write(text)
             collected += text.count("\n>") + (1 if text.startswith(">") else 0)
-            # Parse Link header for next page
             link = r.headers.get("Link", "")
             import re as _re
             m = _re.search(r'<([^>]+)>;\s*rel="next"', link)

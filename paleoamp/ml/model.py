@@ -2,7 +2,7 @@
 MLP classifier trained on ESM-2 embeddings to predict AMP probability.
 
 Architecture: 480 → 256 → 64 → 1
-Loss:         BCEWithLogitsLoss(pos_weight=3.0)
+Loss:         BCEWithLogitsLoss(pos_weight auto-computed from training class ratio)
 Optimizer:    AdamW, lr=1e-3, weight_decay=1e-4
 """
 
@@ -40,7 +40,7 @@ class TrainConfig:
     dropout: float = 0.3
     lr: float = 1e-3
     weight_decay: float = 1e-4
-    pos_weight: float = 3.0       # 1:3 pos:neg ratio per AmPEP recommendation
+    pos_weight: float | None = None  # None = auto-compute as neg_count/pos_count from y_train
     batch_size: int = 256
     max_epochs: int = 50
     patience: int = 7             # early stopping patience (epochs without AUPR gain)
@@ -84,8 +84,16 @@ def train(
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.lr, weight_decay=config.weight_decay
     )
+    if config.pos_weight is None:
+        n_pos = float((y_train == 1).sum())
+        n_neg = float((y_train == 0).sum())
+        pw = n_neg / n_pos if n_pos > 0 else 1.0
+        print(f"[train] pos_weight auto={pw:.3f}  (neg={n_neg:.0f} / pos={n_pos:.0f})")
+    else:
+        pw = config.pos_weight
+        print(f"[train] pos_weight={pw:.3f}  (manual)")
     loss_fn = nn.BCEWithLogitsLoss(
-        pos_weight=torch.tensor([config.pos_weight], device=device)
+        pos_weight=torch.tensor([pw], device=device)
     )
 
     train_ds = TensorDataset(
