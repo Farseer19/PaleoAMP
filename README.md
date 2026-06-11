@@ -52,7 +52,7 @@ Training commands are described in the [Classifier Training](#classifier-trainin
 ### 1. Clone the repository
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Farseer19/PaleoAMP.git
 cd PaleoAMP
 ```
 
@@ -100,23 +100,100 @@ re-download if files already exist.
 
 ### Step 2 — Find and download ancient metagenome reads
 
-Search NCBI SRA for relevant datasets, then download the FASTQs.
+#### `paleoamp sra search`
+
+Queries NCBI SRA via the E-utilities API and returns a table of matching
+runs. Results are printed to the terminal and optionally saved to a TSV file.
 
 ```bash
-# Search — results printed to terminal and optionally saved to TSV
 paleoamp sra search "permafrost metagenome ancient" \
     --microbial-only \
     --min-reads 500000 \
     --output candidates.tsv
+```
 
-# Merge results from multiple searches (deduplicates on run_accession)
+**Filters:**
+
+`--ancient-filter` *(on by default, disable with `--no-ancient-filter`)*
+Scans every metadata field (study title, experiment description, sample
+name, organism, geographic location, isolation source, and others) for
+keywords that indicate an ancient or paleogenomic context:
+`ancient`, `paleo`, `fossil`, `permafrost`, `archaeological`, `holocene`,
+`pleistocene`, `ice core`, `mummy`, `archaic`, `subfossil`, `historic`,
+`medieval`, `burial`, `extinct`, `coprolite`, `environmental dna`,
+`late quaternary`.
+This is a heuristic — it catches clearly ancient datasets but may miss
+studies that don't use these exact terms in their metadata. Disable it
+with `--no-ancient-filter` if you want every result back and intend to
+inspect them manually.
+
+`--microbial-only`
+Applies two stricter criteria on top of the ancient filter:
+1. The run's `library_source` field must be `METAGENOMIC` — this removes
+   whole-genome sequencing of isolates, amplicon surveys (16S), and
+   eukaryotic WGS.
+2. At least one microbial context keyword must appear in the metadata
+   (`microbiome`, `bacteria`, `archaea`, `dental calculus`, `soil
+   metagenome`, `permafrost metagenome`, etc.) and no plant/animal eDNA
+   exclusion keywords (`plant eDNA`, `vertebrate eDNA`, `herbarium`,
+   `insect metagenome`, etc.). This keeps the focus on prokaryotic
+   communities where novel AMPs are most likely to be found.
+
+`--min-reads N`
+Drops runs with fewer than N total read pairs (`total_spots`). Ancient
+metagenomes typically have low microbial read counts after host and
+environmental DNA subtraction — ≥ 500,000 reads is a practical lower
+bound for a workable assembly.
+
+`--min-bases BP`
+Drops runs with fewer than BP total sequenced bases. An alternative to
+`--min-reads` when comparing libraries with different read lengths.
+
+`--min-size-mb MB`
+Drops runs whose reported compressed file size is below MB megabytes.
+Useful as a quick proxy when spot/base counts are not populated in the
+metadata.
+
+`--max-results N` *(default: 50)*
+Maximum number of SRA records to return. Increase for broad surveys.
+
+---
+
+#### `paleoamp sra merge-candidates`
+
+After running multiple searches with different query terms, merge the
+resulting TSV files into one deduplicated table.
+
+```bash
 paleoamp sra merge-candidates search1.tsv search2.tsv -o all_candidates.tsv
+```
 
-# Download FASTQs for chosen accessions
+Deduplicates on `run_accession` (keeping the first occurrence) and adds
+a `found_in` column showing which source files each run appeared in.
+Useful for knowing which accessions turned up across several independent
+searches, which can be a signal of relevance.
+
+---
+
+#### `paleoamp sra download`
+
+Downloads FASTQ files for one or more accessions.
+
+```bash
 paleoamp sra download ERR6458500 SRR33371653 SRR35641057
 ```
 
-Files land in `data/reads/<accession>/` by default.
+`--via-ena` *(default)*
+Downloads directly from the European Nucleotide Archive over HTTP — no
+SRA Toolkit required. Constructs the canonical ENA FTP path from the
+accession format and tries paired-end files first (`_1.fastq.gz`,
+`_2.fastq.gz`), falling back to single-end (`accession.fastq.gz`).
+
+`--via-sratools`
+Uses `fasterq-dump` from the NCBI SRA Toolkit instead. Required for
+accessions not mirrored on ENA (rare, but some very new submissions).
+
+Files are saved to `data/reads/<accession>/`.
 
 ---
 
