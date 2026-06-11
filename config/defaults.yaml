@@ -1,0 +1,52 @@
+# Quality thresholds for ancient DNA sequence acceptance
+
+quality:
+  # Minimum mean Phred score across the read
+  min_mean_phred: 20
+  # Minimum read length to consider (aDNA is typically short)
+  min_read_length: 30
+  # Maximum read length — reads much longer than this are suspicious for aDNA
+  max_read_length: 150
+  # Minimum fraction of reads passing length filter
+  min_passing_fraction: 0.5
+
+adna_damage:
+  # Minimum C→T substitution rate at position 1 of 5' end to consider "damaged"
+  min_ct_rate_5prime: 0.05
+  # Minimum G→A substitution rate at position 1 of 3' end
+  min_ga_rate_3prime: 0.05
+  # Number of terminal positions to evaluate (each end)
+  terminal_positions: 10
+  # Require both 5' C→T AND 3' G→A signal for a PASS verdict
+  require_both_termini: true
+
+# AMP reference databases to download
+amp_databases:
+  dramp:
+    url: "https://dramp.cpu-bioinfor.org/downloads/download.php?filename=DRAMP3.0_general.fasta"
+    filename: "dramp_general.fasta"
+    description: "DRAMP 3.0 — general AMP sequences"
+  apd3:
+    url: "https://aps.unmc.edu/AP/lib/APD_sequence_release_09142020.fasta"
+    filename: "apd3.fasta"
+    description: "Antimicrobial Peptide Database (APD3)"
+  dbamp:
+    url: "https://awi.cuhk.edu.cn/dbAMP/download/dbAMP_v2.0.fasta"
+    filename: "dbamp_v2.fasta"
+    description: "dbAMP v2.0"
+
+# Assembly settings
+assembly:
+  # Minimum contig length to retain (bp); shorter contigs are too fragmented
+  # for reliable ORF prediction
+  min_contig_len: 200
+  threads: 4
+
+# SRA search defaults for ancient metagenomes
+sra:
+  default_search_terms:
+    - "ancient metagenome"
+    - "paleogenomics microbial"
+    - "permafrost metagenome ancient"
+    - "archaeological microbiome"
+  max_results: 200

@@ -1,0 +1,30 @@
+# --- Data (all downloaded/generated, use pipeline commands to recreate) ---
+data/*
+!data/.gitkeep
+
+# --- Pipeline results (regenerable outputs) ---
+results/assembly/
+results/orfs/
+results/orfs_hydrophobic/
+results/blast/
+results/blast_all/
+results/blast_remote/
+results/qc/
+results/ml/scores/
+results/ml/novelty/
+results/ml/validated/
+results/ml_old/
+
+# Keep the trained model checkpoint
+!results/ml/checkpoints/best_model.pt
+
+# --- Candidate TSVs written to project root during exploration ---
+candidates*.tsv
+
+# --- Python build/cache artifacts ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+dist/
+build/

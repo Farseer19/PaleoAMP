@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paleoamp"
+version = "0.1.0"
+description = "Discover novel AMP genes in ancient/extinct microbial samples"
+requires-python = ">=3.10"
+dependencies = [
+    "biopython>=1.83",
+    "click>=8.0",
+    "pandas>=2.0",
+    "requests>=2.28",
+    "rich>=13.0",
+    "numpy>=1.24",
+    "pysradb>=2.0",
+]
+
+[project.scripts]
+paleoamp = "paleoamp.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["paleoamp*"]
