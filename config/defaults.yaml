@@ -38,9 +38,9 @@ amp_databases:
 
 # Assembly settings
 assembly:
-  # Minimum contig length to retain (bp); shorter contigs are too fragmented
-  # for reliable ORF prediction
-  min_contig_len: 200
+  # Minimum contig length to retain (bp). 100bp allows short AMP genes (~30aa)
+  # to survive; Prodigal meta mode handles short contigs reliably.
+  min_contig_len: 100
   threads: 4
 
 # SRA search defaults for ancient metagenomes

@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
-from paleoamp.qc.adna import DamageProfile
+from paleoamp.qc.adna import DamageProfile, QCThresholds
 
 
 _console = Console()
@@ -61,27 +61,37 @@ def print_summary_table(profiles: list[DamageProfile]) -> None:
                 _console.print(f"    • {reason}")
 
 
-def print_damage_plot(profile: DamageProfile, positions: int = 10) -> None:
+def print_damage_plot(
+    profile: DamageProfile,
+    positions: int = 10,
+    thresholds: QCThresholds | None = None,
+) -> None:
     """Print ASCII misincorporation plot for a single profile."""
+    t = thresholds or QCThresholds()
     _console.rule(f"[bold]{Path(profile.path).name}[/] — Damage Profile")
 
     ct = profile.ct_rates_5prime[:positions]
     ga = profile.ga_rates_3prime[:positions]
 
     _console.print("\n5′ end  C→T misincorporation rate (pos 1 = leftmost base):")
-    _print_bar_chart(ct, label_prefix="5′ pos")
+    _print_bar_chart(ct, label_prefix="5′ pos", pass_threshold=t.min_ct_rate_5prime)
 
     _console.print("\n3′ end  G→A misincorporation rate (pos 1 = rightmost base):")
-    _print_bar_chart(ga, label_prefix="3′ pos")
+    _print_bar_chart(ga, label_prefix="3′ pos", pass_threshold=t.min_ga_rate_3prime)
     _console.print()
 
 
-def _print_bar_chart(rates: list[float], label_prefix: str) -> None:
+def _print_bar_chart(
+    rates: list[float],
+    label_prefix: str,
+    pass_threshold: float = 0.10,
+) -> None:
     max_width = 40
+    mid_threshold = pass_threshold * 0.5
     for i, rate in enumerate(rates, start=1):
         bar_len = int(rate * max_width / max(rates + [0.001]))
         bar = "█" * bar_len
-        color = "green" if rate >= 0.05 else "yellow" if rate >= 0.02 else "red"
+        color = "green" if rate >= pass_threshold else "yellow" if rate >= mid_threshold else "red"
         _console.print(
             f"  {label_prefix} {i:>2}: [{color}]{bar:<{max_width}}[/] {rate:.4f}"
         )

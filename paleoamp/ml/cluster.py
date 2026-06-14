@@ -135,12 +135,21 @@ def cluster_cdhit(
             if line.startswith(">Cluster"):
                 cluster_id += 1
             else:
-                # extract sequence id between >...
-                m = __import__("re").search(r">(\d+)\.\.\..*", line)
+                m = __import__("re").search(r">(\S+?)\.\.\..*", line)
                 if m:
                     cluster_map[m.group(1)] = cluster_id
 
-    return pd.Series([cluster_map[str(i)] for i in df.index], index=df.index, name="cluster_id")
+    # Sequences absent from the clstr file (filtered by CD-HIT) get singleton clusters.
+    next_id = cluster_id + 1
+    result = []
+    for i in df.index:
+        key = str(i)
+        if key not in cluster_map:
+            cluster_map[key] = next_id
+            next_id += 1
+        result.append(cluster_map[key])
+
+    return pd.Series(result, index=df.index, name="cluster_id")
 
 
 def cluster_sequences(

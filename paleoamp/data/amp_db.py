@@ -14,6 +14,8 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 
+_STANDARD_AAS = frozenset("ACDEFGHIKLMNPQRSTVWY")
+
 _DATABASES: dict[str, dict] = {
     "apd": {
         "url": "https://aps.unmc.edu/assets/sequences/naturalAMPs_APD2024a.fasta",
@@ -30,6 +32,11 @@ _DATABASES: dict[str, dict] = {
         "filename": "dramp_specific.fasta",
         "description": "DRAMP 3.0 — specific AMPs (target-activity annotations)",
     },
+    "dramp_predicted": {
+        "url": "https://dramp.cpu-bioinfor.org/downloads/download.php?filename=download_data/DRAMP3.0_new/predicted_amps.fasta",
+        "filename": "dramp_predicted.fasta",
+        "description": "DRAMP 3.0 — computationally predicted AMPs (~60k sequences, broader novelty coverage)",
+    },
     "uniprot_amp": {
         "url": (
             "https://rest.uniprot.org/uniprotkb/search"
@@ -44,6 +51,39 @@ _DATABASES: dict[str, dict] = {
         "url": "https://awi.cuhk.edu.cn/dbAMP/download/dbAMP_v2.0.fasta",
         "filename": "dbamp_v2.fasta",
         "description": "dbAMP v2.0",
+        "ssl_verify": False,  # server SSL certificate issue — skip verification
+    },
+    "dbaasp": {
+        "url": "https://dbaasp.org/api/peptides/?format=fasta",
+        "filename": "dbaasp.fasta",
+        "description": "DBAASP v3 — database of antimicrobial activity and structure",
+    },
+    "bactibase": {
+        "url": "http://bactibase.hammamilab.org/peptides.fasta",
+        "filename": "bactibase.fasta",
+        "description": "BACTIBASE — experimentally validated bacteriocins",
+    },
+    "uniprot_amp_bacteria": {
+        "url": (
+            "https://rest.uniprot.org/uniprotkb/search"
+            "?query=reviewed:true+keyword:KW-0929+taxonomy_id:2+length:[5+TO+200]"
+            "&format=fasta&size=500"
+        ),
+        "filename": "uniprot_amp_bacteria.fasta",
+        "description": "UniProt reviewed bacterial AMP peptides (KW-0929 + taxonomy:Bacteria)",
+        "paginated": True,
+        "paginate": 10000,
+    },
+    "uniprot_amp_archaea": {
+        "url": (
+            "https://rest.uniprot.org/uniprotkb/search"
+            "?query=reviewed:true+keyword:KW-0929+taxonomy_id:2157+length:[5+TO+200]"
+            "&format=fasta&size=500"
+        ),
+        "filename": "uniprot_amp_archaea.fasta",
+        "description": "UniProt reviewed archaeal AMP peptides (KW-0929 + taxonomy:Archaea)",
+        "paginated": True,
+        "paginate": 5000,
     },
 }
 
@@ -91,7 +131,8 @@ def download_amp_databases(
                                  total=info.get("paginate", 10000),
                                  timeout=timeout)
             else:
-                _fetch_file(info["url"], dest, timeout=timeout)
+                _fetch_file(info["url"], dest, timeout=timeout,
+                            ssl_verify=info.get("ssl_verify", True))
             paths[name] = dest
             count = _count_sequences(dest)
             print(f"[ok] {name}: {count:,} sequences → {dest}")
@@ -101,8 +142,8 @@ def download_amp_databases(
     return paths
 
 
-def _fetch_file(url: str, dest: Path, timeout: int = 60) -> None:
-    with requests.get(url, stream=True, timeout=timeout) as resp:
+def _fetch_file(url: str, dest: Path, timeout: int = 60, ssl_verify: bool = True) -> None:
+    with requests.get(url, stream=True, timeout=timeout, verify=ssl_verify) as resp:
         resp.raise_for_status()
         with open(dest, "wb") as fh:
             for chunk in resp.iter_content(chunk_size=65536):
@@ -166,31 +207,40 @@ def merge_amp_databases(
     Merge multiple AMP databases into a single non-redundant FASTA.
 
     Deduplication is by MD5 of the uppercase sequence string.
+    Sequences containing non-standard amino acids (B, O, U, Z, hyphens, etc.)
+    are silently skipped — they cause BLASTP/MMseqs2 errors.
     """
     output_path = Path(output_path)
     seen: set[str] = set()
     written = 0
+    skipped = 0
 
     with open(output_path, "w") as out:
         for db_name, path in db_paths.items():
             if not path.exists():
                 continue
             with open(path, encoding="utf-8", errors="replace") as fh:
-              for rec in SeqIO.parse(fh, "fasta"):
-                try:
-                    seq = str(rec.seq).upper()
-                except UnicodeDecodeError:
-                    seq = rec.seq._data.decode("ascii", errors="ignore").upper()
-                rec.seq = Seq(seq)
-                key = hashlib.md5(seq.encode()).hexdigest()
-                if deduplicate and key in seen:
-                    continue
-                seen.add(key)
-                rec.id = f"{db_name}|{rec.id}"
-                rec.description = ""
-                SeqIO.write(rec, out, "fasta")
-                written += 1
+                for rec in SeqIO.parse(fh, "fasta"):
+                    try:
+                        seq = str(rec.seq).upper()
+                    except UnicodeDecodeError:
+                        seq = rec.seq._data.decode("ascii", errors="ignore").upper()
+                    seq = seq.rstrip("*")
+                    if not seq or not all(aa in _STANDARD_AAS for aa in seq):
+                        skipped += 1
+                        continue
+                    rec.seq = Seq(seq)
+                    key = hashlib.md5(seq.encode()).hexdigest()
+                    if deduplicate and key in seen:
+                        continue
+                    seen.add(key)
+                    rec.id = f"{db_name}|{rec.id}"
+                    rec.description = ""
+                    SeqIO.write(rec, out, "fasta")
+                    written += 1
 
+    if skipped:
+        print(f"[merge] {skipped:,} sequences skipped (non-standard amino acids)")
     print(f"[merge] {written:,} unique AMP sequences → {output_path}")
     return output_path
 

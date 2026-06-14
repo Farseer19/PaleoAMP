@@ -1,6 +1,8 @@
 # --- Data (all downloaded/generated, use pipeline commands to recreate) ---
 data/*
 !data/.gitkeep
+# Control sequences are small and ship with the repo for reproducibility
+!data/controls/
 
 # --- Pipeline results (regenerable outputs) ---
 results/assembly/

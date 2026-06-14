@@ -211,7 +211,27 @@ _PHYSCOCHEM_CRITERIA = {
     "standard_aa_ok":     lambda p: p["frac_standard_aa"] == 1.0,
 }
 
-_BOMAN_THRESHOLD = 0.5  # net polar/cationic character — threshold for boman_ok criterion
+_PARTIAL_SCORE = {"00": 1.0, "01": 0.5, "10": 0.5, "11": 0.0}
+
+
+def calibrate_boman_threshold(dataset_csv: Path, percentile: float = 10.0) -> float:
+    """
+    Return the *percentile*th-percentile Boman index across all positive training
+    sequences.  Using the 10th percentile means 90% of real AMPs pass — sets a
+    data-driven floor rather than the arbitrary 0.5 default.
+    """
+    df = pd.read_csv(dataset_csv)
+    pos_seqs = df[df["label"] == 1]["sequence"].dropna()
+    scores = [
+        boman_index(s)
+        for s in pos_seqs
+        if s and all(aa in _STANDARD_AAS for aa in s.upper())
+    ]
+    if not scores:
+        return 0.0
+    threshold = float(np.percentile(scores, percentile))
+    print(f"[validate] Boman threshold (p{percentile:.0f} of {len(scores):,} positives): {threshold:.3f}")
+    return threshold
 
 
 def validate_candidates(
@@ -219,14 +239,23 @@ def validate_candidates(
     gff_path: Path,
     dataset_csv: Path,
     output_dir: Path,
-    aac_threshold: float = 0.4,
+    aac_threshold: float = 0.35,
 ) -> pd.DataFrame:
     """
     Run all three validation layers and return a ranked DataFrame with
     per-criterion flags and a final PASS/WARN/FAIL verdict.
 
-    aac_threshold — minimum AAC classifier probability to count as a vote
-                    (set lower than 0.5 since AAC is weaker than ESM-2)
+    aac_threshold — minimum AAC classifier probability to count as a positive vote.
+                    Set below 0.5 because AAC is weaker than ESM-2 and is biased
+                    against environmental microbial AMPs.
+
+    Scoring (max 5.0):
+      physcochem_pass  — 1.0 or 0.0
+      aac_pass         — 1.0 or 0.0
+      orf_completeness — 1.0 (both ends), 0.5 (one end truncated), 0.0 (fragment)
+      boman_ok         — 1.0 or 0.0  (threshold calibrated from training positives)
+      not_duplicate    — 1.0 or 0.0
+    PASS ≥ 4.0 · WARN ≥ 2.0 · FAIL < 2.0
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -250,6 +279,8 @@ def validate_candidates(
     partial_flags = parse_partial_flags(gff_path)
     df["partial_flag"] = df["seq_id"].map(partial_flags).fillna("??")
     df["is_complete_orf"] = df["partial_flag"] == "00"
+    # Weighted: complete=1.0, one-end truncated=0.5, fragment=0.0
+    df["orf_completeness"] = df["partial_flag"].map(_PARTIAL_SCORE).fillna(0.0)
 
     # --- Layer 3: AAC second classifier ---
     print("[validate] Training AAC classifier …")
@@ -257,31 +288,48 @@ def validate_candidates(
     df["aac_score"] = aac_predict_proba(clf, list(df["sequence"]))
     df["aac_pass"] = df["aac_score"] >= aac_threshold
 
-    # --- Boman index criterion ---
-    df["boman_ok"] = df["boman_index"] >= _BOMAN_THRESHOLD
+    # --- Boman index criterion (threshold calibrated from training data) ---
+    boman_threshold = calibrate_boman_threshold(dataset_csv)
+    df["boman_ok"] = df["boman_index"] >= boman_threshold
 
-    # --- Consensus verdict (5 criteria, PASS requires ≥ 4) ---
-    # Criteria: physcochem_pass, aac_pass, is_complete_orf, boman_ok, not_duplicate
-    # A partial ORF or low Boman index can each cost one criterion without failing.
+    # --- Consensus score (max 5.0) ---
     n_pass_criteria = (
-        df["physcochem_pass"].astype(int)
-        + df["aac_pass"].astype(int)
-        + df["is_complete_orf"].astype(int)
-        + df["boman_ok"].astype(int)
-        + (~df["is_duplicate"]).astype(int)
+        df["physcochem_pass"].astype(float)
+        + df["aac_pass"].astype(float)
+        + df["orf_completeness"]
+        + df["boman_ok"].astype(float)
+        + (~df["is_duplicate"]).astype(float)
     )
 
-    def _verdict(is_dup, n):
+    def _verdict(is_dup: bool, n: float) -> str:
         if is_dup:
             return "DUPLICATE"
-        if n >= 4:
+        if n >= 4.0:
             return "PASS"
-        if n >= 2:
+        if n >= 2.0:
             return "WARN"
         return "FAIL"
 
     df["verdict"] = [_verdict(dup, n) for dup, n in zip(df["is_duplicate"], n_pass_criteria)]
     df["n_criteria_met"] = n_pass_criteria
+
+    # --- Annotate which criteria failed (for WARN/FAIL diagnosis) ---
+    _criteria_labels = {
+        "physcochem_pass": "physco",
+        "aac_pass":        "aac",
+        "is_complete_orf": "complete_orf",
+        "boman_ok":        "boman",
+    }
+
+    def _failed_criteria(row: pd.Series) -> str:
+        if row["is_duplicate"]:
+            return "duplicate"
+        failed = [label for col, label in _criteria_labels.items() if not row[col]]
+        if row["orf_completeness"] == 0.5:
+            failed = [f if f != "complete_orf" else "partial_orf" for f in failed]
+        return "+".join(failed) if failed else ""
+
+    df["failed_criteria"] = df.apply(_failed_criteria, axis=1)
 
     df = df.sort_values(["n_criteria_met", "amp_score"], ascending=[False, False])
 

@@ -1,0 +1,13 @@
+{
+  "input_dim": 480,
+  "dropout": 0.3,
+  "lr": 0.001,
+  "weight_decay": 0.0001,
+  "pos_weight": 0.2623703898149363,
+  "pos_weight_auto": true,
+  "batch_size": 256,
+  "max_epochs": 50,
+  "patience": 7,
+  "best_epoch": 17,
+  "best_val_aupr": 0.9861997203527498
+}

@@ -6,6 +6,7 @@ Model: facebook/esm2_t12_35M_UR50D  (480-dim, frozen during inference)
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,11 @@ from transformers import AutoTokenizer, EsmModel
 
 _MODEL_ID = "facebook/esm2_t12_35M_UR50D"
 _EMBED_DIM = 480
+
+
+def _sequence_hash(sequences: list[str]) -> str:
+    """MD5 of the newline-joined sequence list — used to detect stale caches."""
+    return hashlib.md5("\n".join(sequences).encode()).hexdigest()
 
 
 def _resolve_device(device: str) -> str:
@@ -51,8 +57,15 @@ def embed_sequences(
         return np.empty((0, _EMBED_DIM), dtype=np.float32)
 
     if cache_path and Path(cache_path).exists():
-        print(f"[embed] Loading cached embeddings from {cache_path}")
-        return np.load(cache_path)
+        hash_path = Path(str(cache_path) + ".hash")
+        current_hash = _sequence_hash(sequences)
+        if hash_path.exists() and hash_path.read_text().strip() == current_hash:
+            print(f"[embed] Loading cached embeddings from {cache_path}")
+            return np.load(cache_path)
+        elif hash_path.exists():
+            print(f"[embed] Cache hash mismatch — dataset changed, re-embedding …")
+        else:
+            print(f"[embed] No hash sidecar found — re-embedding to verify freshness …")
 
     device = _resolve_device(device or "auto")
     print(f"[embed] Device: {device}  |  Sequences: {len(sequences):,}")
@@ -99,6 +112,7 @@ def embed_sequences(
     if cache_path:
         Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
         np.save(cache_path, embeddings)
+        Path(str(cache_path) + ".hash").write_text(_sequence_hash(sequences))
         print(f"[embed] Saved {embeddings.shape} → {cache_path}")
 
     return embeddings

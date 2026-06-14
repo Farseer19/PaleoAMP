@@ -8,6 +8,7 @@ Optimizer:    AdamW, lr=1e-3, weight_decay=1e-4
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -90,7 +91,7 @@ def train(
         pw = n_neg / n_pos if n_pos > 0 else 1.0
         print(f"[train] pos_weight auto={pw:.3f}  (neg={n_neg:.0f} / pos={n_pos:.0f})")
     else:
-        pw = config.pos_weight
+        pw = float(config.pos_weight)
         print(f"[train] pos_weight={pw:.3f}  (manual)")
     loss_fn = nn.BCEWithLogitsLoss(
         pos_weight=torch.tensor([pw], device=device)
@@ -159,6 +160,24 @@ def train(
         f"val_AUPR: {result.best_val_aupr:.4f}  "
         f"checkpoint: {best_ckpt}"
     )
+
+    config_record = {
+        "input_dim":     config.input_dim,
+        "dropout":       config.dropout,
+        "lr":            config.lr,
+        "weight_decay":  config.weight_decay,
+        "pos_weight":    pw,
+        "pos_weight_auto": config.pos_weight is None,
+        "batch_size":    config.batch_size,
+        "max_epochs":    config.max_epochs,
+        "patience":      config.patience,
+        "best_epoch":    result.best_epoch,
+        "best_val_aupr": result.best_val_aupr,
+    }
+    config_path = checkpoint_dir / "best_model_config.json"
+    config_path.write_text(json.dumps(config_record, indent=2))
+    print(f"[train] Config → {config_path}")
+
     model.load_state_dict(torch.load(best_ckpt, map_location=device))
     return model, result
 

@@ -108,7 +108,9 @@ def screen_novelty(
             capture_output=True, check=True,
         )
 
-        # Search
+        # Search — -s 7.5 disables the k-mer prefilter and runs full Smith-Waterman,
+        # which is essential for short peptides (10-50aa) where the default k=6
+        # prefilter misses most true homologs and produces false "novel" results.
         subprocess.run(
             [
                 "mmseqs", "search",
@@ -116,6 +118,7 @@ def screen_novelty(
                 "--min-seq-id", str(pident_threshold / 100),
                 "-c", str(qcov_threshold / 100),
                 "--cov-mode", "0",
+                "-s", "7.5",
                 "--threads", str(threads),
                 "-v", "0",
             ],
@@ -137,7 +140,7 @@ def screen_novelty(
     if result_m8.exists() and result_m8.stat().st_size > 0:
         hits = pd.read_csv(result_m8, sep="\t", names=_MMSEQS_RESULT_COLS)
         hits["qcov"] = (hits["qend"] - hits["qstart"] + 1) / hits["qlen"] * 100
-        hits = hits[(hits["pident"] * 100 >= pident_threshold) & (hits["qcov"] >= qcov_threshold)]
+        hits = hits[(hits["pident"] >= pident_threshold) & (hits["qcov"] >= qcov_threshold)]
     else:
         hits = pd.DataFrame(columns=_MMSEQS_RESULT_COLS + ["qcov"])
 

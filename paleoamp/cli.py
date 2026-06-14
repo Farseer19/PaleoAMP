@@ -41,14 +41,14 @@ def db_group():
 @db_group.command("download")
 @click.option(
     "--output-dir", "-o",
-    default="./data/amp_databases",
+    default="./data/amp_sources",
     show_default=True,
     help="Directory to save downloaded database files.",
 )
 @click.option(
     "--databases", "-d",
     multiple=True,
-    default=["apd", "dramp_general", "dramp_specific", "uniprot_amp", "dbamp"],
+    default=["apd", "dramp_general", "dramp_specific", "dramp_predicted", "uniprot_amp", "dbamp", "dbaasp", "bactibase"],
     show_default=True,
     help="Which databases to download. Repeat flag for multiple.",
 )
@@ -68,7 +68,7 @@ def db_download(output_dir: str, databases: tuple, force: bool):
 @db_group.command("merge")
 @click.option(
     "--input-dir", "-i",
-    default="./data/amp_databases",
+    default="./data/amp_sources",
     show_default=True,
     help="Directory containing downloaded database FASTA files.",
 )
@@ -537,11 +537,11 @@ def predict_orfs_cmd(assembly_dir: str, output_dir: str):
     help="Directory to write filtered .faa files.",
 )
 @click.option(
-    "--min-kd",
-    default=0.0,
+    "--min-h-moment",
+    default=0.10,
     show_default=True,
     type=float,
-    help="Minimum mean Kyte-Doolittle hydrophobicity score.",
+    help="Minimum Eisenberg hydrophobic moment (µH). Captures amphipathicity, not net hydrophobicity.",
 )
 @click.option(
     "--min-hydrophobic-fraction",
@@ -553,15 +553,16 @@ def predict_orfs_cmd(assembly_dir: str, output_dir: str):
 def predict_hydrophobic_cmd(
     orfs_dir: str,
     output_dir: str,
-    min_kd: float,
+    min_h_moment: float,
     min_hydrophobic_fraction: float,
 ):
     """
-    Filter predicted ORFs by hydrophobicity as a pre-screen for AMP candidates.
+    Filter predicted ORFs by amphipathicity as a pre-screen for AMP candidates.
 
-    Retains ORFs whose mean Kyte-Doolittle score and hydrophobic residue
-    fraction both meet the given thresholds. Writes one filtered .faa per
-    sample to OUTPUT_DIR for downstream BLAST classification.
+    Retains ORFs whose Eisenberg hydrophobic moment (µH) and hydrophobic residue
+    fraction both meet the given thresholds. µH measures the spatial segregation
+    of hydrophobic and hydrophilic faces — the defining AMP property — rather than
+    net hydrophobicity. Writes one filtered .faa per sample to OUTPUT_DIR.
     """
     from paleoamp.predict.hydrophobic import filter_by_hydrophobicity
     from rich.table import Table
@@ -594,7 +595,7 @@ def predict_hydrophobic_cmd(
         out_faa = out_path / sample_id / f"{sample_id}.faa"
         n_in, n_out = filter_by_hydrophobicity(
             faa, out_faa,
-            min_kd=min_kd,
+            min_h_moment=min_h_moment,
             min_hydrophobic_fraction=min_hydrophobic_fraction,
         )
         total_in += n_in
@@ -661,12 +662,13 @@ def ml_collect(output_dir: str, sources: tuple, force: bool, min_len: int, max_l
     """
     from paleoamp.ml.collect import download_sources, build_dataset, save_dataset
 
-    raw_dir = Path(output_dir) / "raw"
+    pos_dir = Path("./data/amp_sources")
+    neg_dir = Path(output_dir) / "raw"
     _console.print("[bold]Downloading AMP training sources ...[/]")
-    download_sources(raw_dir, list(sources) or None, force=force)
+    download_sources(pos_dir, neg_dir, list(sources) or None, force=force)
 
     _console.print("\n[bold]Building merged dataset ...[/]")
-    df = build_dataset(raw_dir, min_len=min_len, max_len=max_len)
+    df = build_dataset(pos_dir, neg_dir, min_len=min_len, max_len=max_len)
 
     out_csv = Path(output_dir) / "dataset.csv"
     save_dataset(df, out_csv)
@@ -1060,7 +1062,7 @@ def ml_novelty_cmd(
     show_default=True,
 )
 @click.option(
-    "--aac-threshold", default=0.4, show_default=True, type=float,
+    "--aac-threshold", default=0.35, show_default=True, type=float,
     help="Minimum AAC classifier score to count as a positive vote.",
 )
 def ml_validate_cmd(
@@ -1119,11 +1121,14 @@ def ml_validate_cmd(
     table.add_column("ORF", style="cyan")
     table.add_column("Len", justify="right")
     table.add_column("Charge", justify="right")
-    table.add_column("H-moment", justify="right")
+    table.add_column("µH", justify="right")
+    table.add_column("Boman", justify="right")
     table.add_column("Partial", justify="center")
     table.add_column("AAC", justify="right")
-    table.add_column("ML score", justify="right")
+    table.add_column("ML", justify="right")
+    table.add_column("Score", justify="right")
     table.add_column("Verdict", justify="center")
+    table.add_column("Failed", style="dim")
 
     verdict_style = {
         "PASS": "bold green", "WARN": "yellow",
@@ -1136,10 +1141,13 @@ def ml_validate_cmd(
             str(int(row["length"])),
             f"{row['net_charge']:+.1f}",
             f"{row['hydrophobic_moment']:.3f}",
+            f"{row['boman_index']:.3f}",
             row["partial_flag"],
             f"{row['aac_score']:.2f}",
             f"{row['amp_score']:.3f}",
+            f"{row['n_criteria_met']:.1f}",
             f"[{style}]{row['verdict']}[/]",
+            row.get("failed_criteria", ""),
         )
 
     _console.print(table)
@@ -1202,6 +1210,12 @@ def qc_group():
     type=float,
     help="Override minimum 3′ G→A rate threshold.",
 )
+@click.option(
+    "--recursive/--no-recursive",
+    default=False,
+    show_default=True,
+    help="Search subdirectories for FASTQ files (use when INPUT is a top-level reads directory).",
+)
 def qc_assess(
     input_path: str,
     config: str | None,
@@ -1210,6 +1224,7 @@ def qc_assess(
     max_reads: int | None,
     min_ct_rate: float | None,
     min_ga_rate: float | None,
+    recursive: bool,
 ):
     """
     Assess ancient DNA quality of FASTQ files.
@@ -1235,7 +1250,9 @@ def qc_assess(
     input_p = Path(input_path)
     if input_p.is_dir():
         _console.print(f"Assessing FASTQ files in [cyan]{input_p}[/] ...")
-        profiles = assess_fastq_directory(input_p, thresholds=thresholds, max_reads=max_reads)
+        profiles = assess_fastq_directory(
+            input_p, thresholds=thresholds, max_reads=max_reads, recursive=recursive
+        )
     elif input_p.is_file():
         _console.print(f"Assessing [cyan]{input_p}[/] ...")
         profiles = [assess_fastq(input_p, thresholds=thresholds, max_reads=max_reads)]
@@ -1247,7 +1264,7 @@ def qc_assess(
 
     if plot:
         for p in profiles:
-            print_damage_plot(p)
+            print_damage_plot(p, thresholds=thresholds)
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1259,3 +1276,108 @@ def qc_assess(
         f"\n[bold]{n_pass}/{len(profiles)} file(s) passed quality thresholds.[/]"
     )
     sys.exit(0 if n_pass > 0 else 1)
+
+
+@qc_group.command("trim")
+@click.argument("reads_dir", metavar="READS_DIR")
+@click.option(
+    "--output-dir", "-o",
+    default="./data/reads_trimmed",
+    show_default=True,
+    help="Directory to write trimmed FASTQ files (mirroring per-accession subdirectory layout).",
+)
+@click.option(
+    "--threads", "-t",
+    default=4,
+    show_default=True,
+    type=int,
+    help="Threads passed to fastp.",
+)
+@click.option(
+    "--min-length",
+    default=30,
+    show_default=True,
+    type=int,
+    help="Discard reads shorter than this after trimming.",
+)
+def qc_trim(reads_dir: str, output_dir: str, threads: int, min_length: int):
+    """
+    Trim adapter sequences from FASTQ files using fastp.
+
+    READS_DIR should contain per-accession subdirectories (e.g. data/reads/).
+    Trimmed files are written to OUTPUT_DIR/<accession>/ preserving the same
+    layout. fastp auto-detects adapter sequences — no adapter list needed.
+
+    Run this between 'paleoamp qc assess' and 'paleoamp assemble run'. Point
+    the assembler at OUTPUT_DIR instead of the original reads directory.
+    """
+    import shutil
+    import subprocess
+
+    fastp = shutil.which("fastp")
+    if fastp is None:
+        _console.print("[red]fastp not found.[/] Install with: conda install -c bioconda fastp")
+        sys.exit(1)
+
+    reads_path = Path(reads_dir)
+    out_path = Path(output_dir)
+
+    sample_dirs = sorted(d for d in reads_path.iterdir() if d.is_dir())
+    if not sample_dirs:
+        _console.print(f"[red]No sample subdirectories found in {reads_path}[/]")
+        sys.exit(1)
+
+    total_samples = 0
+    for sample_dir in sample_dirs:
+        sample_id = sample_dir.name
+        fq_files = sorted(
+            list(sample_dir.glob("*.fastq.gz"))
+            + list(sample_dir.glob("*.fastq"))
+            + list(sample_dir.glob("*.fq.gz"))
+            + list(sample_dir.glob("*.fq"))
+        )
+        if not fq_files:
+            continue
+
+        sample_out = out_path / sample_id
+        sample_out.mkdir(parents=True, exist_ok=True)
+
+        # Detect paired-end (two files ending _1/_2 or R1/R2) vs single-end
+        r1 = [f for f in fq_files if any(tag in f.name for tag in ("_1.", "_R1."))]
+        r2 = [f for f in fq_files if any(tag in f.name for tag in ("_2.", "_R2."))]
+
+        if r1 and r2:
+            out_r1 = sample_out / r1[0].name
+            out_r2 = sample_out / r2[0].name
+            cmd = [
+                fastp,
+                "--in1", str(r1[0]), "--in2", str(r2[0]),
+                "--out1", str(out_r1), "--out2", str(out_r2),
+                "--json", str(sample_out / "fastp.json"),
+                "--html", str(sample_out / "fastp.html"),
+                "--length_required", str(min_length),
+                "--thread", str(threads),
+                "--disable_quality_filtering",
+            ]
+        else:
+            out_se = sample_out / fq_files[0].name
+            cmd = [
+                fastp,
+                "--in1", str(fq_files[0]),
+                "--out1", str(out_se),
+                "--json", str(sample_out / "fastp.json"),
+                "--html", str(sample_out / "fastp.html"),
+                "--length_required", str(min_length),
+                "--thread", str(threads),
+                "--disable_quality_filtering",
+            ]
+
+        _console.print(f"[cyan]{sample_id}[/] trimming …")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            _console.print(f"  [red]fastp error:[/] {result.stderr.strip()}")
+        else:
+            total_samples += 1
+            _console.print(f"  [green]done[/] → {sample_out}")
+
+    _console.print(f"\n[bold]{total_samples} sample(s) trimmed → {out_path}[/]")

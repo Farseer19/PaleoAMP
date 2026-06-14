@@ -141,7 +141,7 @@ class QCThresholds:
         return cls(
             min_mean_phred=q.get("min_mean_phred", 20.0),
             min_read_length=q.get("min_read_length", 30),
-            max_read_length=q.get("max_read_length", 150),
+            max_read_length=q.get("max_read_length", 300),
             min_passing_fraction=q.get("min_passing_fraction", 0.5),
             min_ct_rate_5prime=d.get("min_ct_rate_5prime", 0.05),
             min_ga_rate_3prime=d.get("min_ga_rate_3prime", 0.05),
@@ -211,17 +211,22 @@ def assess_fastq_directory(
     directory: Path,
     thresholds: QCThresholds | None = None,
     max_reads: int | None = None,
+    recursive: bool = False,
 ) -> list[DamageProfile]:
-    """Assess all FASTQ / FASTQ.gz files in *directory* (non-recursive)."""
+    """Assess all FASTQ / FASTQ.gz files in *directory*.
+
+    Set *recursive=True* to search subdirectories (e.g. data/reads/ containing
+    per-accession subdirs). Files are sorted so output order is deterministic.
+    """
     directory = Path(directory)
-    files = sorted(
-        list(directory.glob("*.fastq"))
-        + list(directory.glob("*.fastq.gz"))
-        + list(directory.glob("*.fq"))
-        + list(directory.glob("*.fq.gz"))
-    )
+    patterns = ("*.fastq", "*.fastq.gz", "*.fq", "*.fq.gz")
+    if recursive:
+        files = sorted(f for pat in patterns for f in directory.rglob(pat))
+    else:
+        files = sorted(f for pat in patterns for f in directory.glob(pat))
     if not files:
-        raise FileNotFoundError(f"No FASTQ files found in {directory}")
+        loc = "in or under" if recursive else "in"
+        raise FileNotFoundError(f"No FASTQ files found {loc} {directory}")
 
     return [
         assess_fastq(f, thresholds=thresholds, max_reads=max_reads)

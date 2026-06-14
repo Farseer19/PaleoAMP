@@ -1,13 +1,15 @@
 """
 Collect, filter, and deduplicate AMP training data.
 
-Positives: APD6, DRAMP 3.0, DBAASP
-Negatives: AMPlify negative set + UniProt non-AMP peptides
+Positives: APD2024a, DRAMP 3.0 general, DRAMP 3.0 specific, UniProt KW-0929
+Negatives: UniProt non-AMP, UniProt transmembrane (hard), UniProt signal (hard),
+           shuffled positives (hard — same AA composition, random order)
 """
 
 from __future__ import annotations
 
 import hashlib
+import random
 import re
 import sys
 import time
@@ -20,10 +22,10 @@ from Bio.SeqRecord import SeqRecord
 
 _STANDARD_AAS = frozenset("ACDEFGHIKLMNPQRSTVWY")
 
-_SOURCES: dict[str, dict] = {
-    # Positives
+# Positive AMP sources — shared with the novelty-screen reference database.
+# These are downloaded to data/amp_sources/ so both pipelines read from one place.
+_POSITIVE_SOURCES: dict[str, dict] = {
     "apd": {
-        # APD2024a — all natural AMPs; verify latest filename at aps.unmc.edu/downloads
         "url": "https://aps.unmc.edu/assets/sequences/naturalAMPs_APD2024a.fasta",
         "filename": "apd_natural.fasta",
         "label": 1,
@@ -42,8 +44,6 @@ _SOURCES: dict[str, dict] = {
         "description": "DRAMP 3.0 — specific AMPs (target-activity annotations)",
     },
     "uniprot_amp": {
-        # Reviewed SwissProt proteins with AMP keyword (KW-0929), length 5–200 aa.
-        # Replaces DBAASP which no longer offers a bulk download endpoint.
         "url": (
             "https://rest.uniprot.org/uniprotkb/search"
             "?query=reviewed:true+keyword:KW-0929+length:[5+TO+200]"
@@ -54,10 +54,41 @@ _SOURCES: dict[str, dict] = {
         "description": "UniProt reviewed AMP peptides (KW-0929)",
         "paginate": 10000,
     },
-    # Negatives
+    "uniprot_amp_bacteria": {
+        # Bacterial AMPs specifically — counters the animal bias in APD/DRAMP.
+        "url": (
+            "https://rest.uniprot.org/uniprotkb/search"
+            "?query=reviewed:true+keyword:KW-0929+taxonomy_id:2+length:[5+TO+200]"
+            "&format=fasta&size=500"
+        ),
+        "filename": "uniprot_amp_bacteria.fasta",
+        "label": 1,
+        "description": "UniProt reviewed bacterial AMP peptides (KW-0929 + taxonomy:Bacteria)",
+        "paginate": 10000,
+    },
+    "uniprot_amp_archaea": {
+        # Archaeal AMPs — relevant to permafrost/extreme-environment metagenomes.
+        "url": (
+            "https://rest.uniprot.org/uniprotkb/search"
+            "?query=reviewed:true+keyword:KW-0929+taxonomy_id:2157+length:[5+TO+200]"
+            "&format=fasta&size=500"
+        ),
+        "filename": "uniprot_amp_archaea.fasta",
+        "label": 1,
+        "description": "UniProt reviewed archaeal AMP peptides (KW-0929 + taxonomy:Archaea)",
+        "paginate": 5000,
+    },
+    "bactibase": {
+        "url": "http://bactibase.hammamilab.org/peptides.fasta",
+        "filename": "bactibase.fasta",
+        "label": 1,
+        "description": "BACTIBASE — experimentally validated bacteriocins",
+    },
+}
+
+# Negative sources — only used for ML training, never in the novelty reference DB.
+_NEGATIVE_SOURCES: dict[str, dict] = {
     "uniprot_non_amp": {
-        # Reviewed SwissProt proteins without AMP keyword (KW-0929), length 5–200 aa.
-        # Fetches up to 10,000 to give a ~3:1 neg:pos ratio vs APD.
         "url": (
             "https://rest.uniprot.org/uniprotkb/search"
             "?query=reviewed:true+NOT+keyword:KW-0929+length:[5+TO+200]"
@@ -66,9 +97,36 @@ _SOURCES: dict[str, dict] = {
         "filename": "uniprot_non_amp.fasta",
         "label": 0,
         "description": "UniProt reviewed non-AMP peptides",
-        "paginate": 50000,  # total sequences to collect across pages
+        "paginate": 50000,
+    },
+    "uniprot_transmem": {
+        # Hard negatives: share hydrophobic character of AMPs but lack cationic amphipathicity.
+        "url": (
+            "https://rest.uniprot.org/uniprotkb/search"
+            "?query=reviewed:true+ft_transmem:*+NOT+keyword:KW-0929+length:[5+TO+60]"
+            "&format=fasta&size=500"
+        ),
+        "filename": "uniprot_transmem.fasta",
+        "label": 0,
+        "description": "UniProt short transmembrane proteins (non-AMP hard negatives)",
+        "paginate": 5000,
+    },
+    "uniprot_signal": {
+        # Hard negatives: signal peptides are amphipathic but not antimicrobial.
+        "url": (
+            "https://rest.uniprot.org/uniprotkb/search"
+            "?query=reviewed:true+ft_signal:*+NOT+keyword:KW-0929+length:[5+TO+60]"
+            "&format=fasta&size=500"
+        ),
+        "filename": "uniprot_signal.fasta",
+        "label": 0,
+        "description": "UniProt short signal-peptide proteins (non-AMP hard negatives)",
+        "paginate": 5000,
     },
 }
+
+# Combined view for code that still needs to iterate all sources by name.
+_SOURCES = {**_POSITIVE_SOURCES, **_NEGATIVE_SOURCES}
 
 
 def _download_paginated(url: str, dest: Path, total: int, max_retries: int = 5) -> None:
@@ -101,20 +159,28 @@ def _download_paginated(url: str, dest: Path, total: int, max_retries: int = 5) 
 
 
 def download_sources(
-    output_dir: Path,
+    pos_dir: Path,
+    neg_dir: Path,
     sources: list[str] | None = None,
     force: bool = False,
 ) -> dict[str, Path]:
-    """Download raw source files. Returns {name: local_path} for successful downloads."""
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    """
+    Download raw source files. Positives go to *pos_dir*, negatives to *neg_dir*.
+
+    Returns {name: local_path} for successful downloads.
+    """
+    pos_dir = Path(pos_dir)
+    neg_dir = Path(neg_dir)
+    pos_dir.mkdir(parents=True, exist_ok=True)
+    neg_dir.mkdir(parents=True, exist_ok=True)
 
     targets = sources or list(_SOURCES.keys())
     paths: dict[str, Path] = {}
 
     for name in targets:
         info = _SOURCES[name]
-        dest = output_dir / info["filename"]
+        dest_dir = neg_dir if info["label"] == 0 else pos_dir
+        dest = dest_dir / info["filename"]
 
         if dest.exists() and not force:
             print(f"[skip] {name}: already downloaded")
@@ -128,6 +194,9 @@ def download_sources(
             else:
                 r = requests.get(info["url"], stream=True, timeout=60)
                 r.raise_for_status()
+                content_type = r.headers.get("Content-Type", "")
+                if "html" in content_type:
+                    raise ValueError(f"Server returned HTML (not FASTA) — URL may be broken")
                 with open(dest, "wb") as fh:
                     for chunk in r.iter_content(65536):
                         fh.write(chunk)
@@ -172,7 +241,8 @@ def _load_csv(path: Path, seq_col: str, label: int) -> list[tuple[str, str, int]
 
 
 def build_dataset(
-    raw_dir: Path,
+    pos_dir: Path,
+    neg_dir: Path,
     min_len: int = 5,
     max_len: int = 200,
 ) -> pd.DataFrame:
@@ -180,11 +250,14 @@ def build_dataset(
     Load all downloaded source files, apply length + standard-AA filters,
     deduplicate by exact sequence, and return a DataFrame with columns:
       sequence, label, source, seq_id
+
+    Positives are read from *pos_dir*, negatives from *neg_dir*.
     """
     all_records: list[tuple[str, str, int, str]] = []  # (id, seq, label, source)
 
     for name, info in _SOURCES.items():
-        dest = raw_dir / info["filename"]
+        dest_dir = neg_dir if info["label"] == 0 else pos_dir
+        dest = dest_dir / info["filename"]
         if not dest.exists():
             print(f"[warn] {name}: file not found, skipping", file=sys.stderr)
             continue
@@ -214,6 +287,26 @@ def build_dataset(
     df["_hash"] = df["sequence"].apply(lambda s: hashlib.md5(s.encode()).hexdigest())
     df = df.drop_duplicates(subset=["_hash"]).drop(columns=["_hash"])
     print(f"[dedup] {len(df):,} unique sequences ({before - len(df):,} duplicates removed)")
+
+    # Shuffled positives — same AA composition as real AMPs, randomised order.
+    # Forces the model to learn positional/structural patterns rather than
+    # composition alone; these are the hardest negatives to generate.
+    pos_seqs = df[df["label"] == 1]["sequence"].tolist()
+    rng = random.Random(42)
+    shuffled_records = []
+    seen_hashes = set(hashlib.md5(s.encode()).hexdigest() for s in df["sequence"])
+    for i, seq in enumerate(pos_seqs[:5000]):
+        chars = list(seq)
+        rng.shuffle(chars)
+        shuffled = "".join(chars)
+        h = hashlib.md5(shuffled.encode()).hexdigest()
+        if h not in seen_hashes:
+            seen_hashes.add(h)
+            shuffled_records.append((f"shuffled_{i}", shuffled, 0, "shuffled_positive"))
+    if shuffled_records:
+        shuffled_df = pd.DataFrame(shuffled_records, columns=["seq_id", "sequence", "label", "source"])
+        df = pd.concat([df, shuffled_df], ignore_index=True)
+        print(f"[shuffled] {len(shuffled_records):,} shuffled-positive hard negatives added")
 
     df = df.reset_index(drop=True)
     print(f"\nPositives: {(df['label'] == 1).sum():,}   Negatives: {(df['label'] == 0).sum():,}")
